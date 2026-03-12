@@ -134,6 +134,7 @@ def main():
     splash_start = time.time()
     save_msg     = ""
     save_msg_end = 0.0
+    prev_gesture = "idle"   # tracks gesture of previous frame
 
     cv2.namedWindow("Virtual Hand-Controlled Board", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("Virtual Hand-Controlled Board", actual_w, actual_h)
@@ -178,8 +179,8 @@ def main():
             save_msg     = f"Saved -> {path}"
             save_msg_end = time.time() + 3.0
 
-        # ── Draw / Erase ──────────────────────────────────────────────
-        if index_tip and index_tip[1] > TOOLBAR_H:
+        # ── Draw / Erase ──────────────────────────────────────────────────
+        if index_tip and index_tip[1] >= TOOLBAR_H:
             if gesture == "draw":
                 if toolbar.eraser_mode:
                     canvas.erase(index_tip, size=26)
@@ -188,9 +189,14 @@ def main():
             elif gesture == "erase":
                 canvas.erase(index_tip, size=26)
             else:
-                canvas.reset_stroke()
+                # Only reset stroke when gesture genuinely changed away from draw
+                if prev_gesture in ("draw", "erase"):
+                    canvas.reset_stroke()
         else:
+            # Finger in toolbar zone or not detected — always reset
             canvas.reset_stroke()
+
+        prev_gesture = gesture
 
         # ── Compose & display ─────────────────────────────────────────
         output = canvas.blend(frame)

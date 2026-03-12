@@ -25,6 +25,15 @@ HAND_CONNECTIONS = [
 ]
 
 
+# Alpha for per-landmark EMA smoothing inside HandTracker.
+# Higher = faster response, lower = smoother but laggy. 0.7 is a good balance.
+_LM_SMOOTH = 0.7
+
+# Number of consecutive frames a gesture must be held before it is confirmed.
+# This prevents a single bad-detection frame from breaking a drawing stroke.
+_GESTURE_DEBOUNCE = 2
+
+
 class HandTracker:
     def __init__(self, max_hands=1, detection_confidence=0.6, tracking_confidence=0.6):
         base_options = mp_python.BaseOptions(model_asset_path=MODEL_PATH)
@@ -39,6 +48,12 @@ class HandTracker:
         self.landmarker = mp_vision.HandLandmarker.create_from_options(options)
         self._detection_result = None
         self._timestamp_ms = 0
+        # Per-hand smoothed landmark buffer: list of 21 (fx, fy) floats
+        self._smooth_lm: list[list[tuple[float, float]] | None] = [None] * max_hands
+        # Gesture debounce state
+        self._last_confirmed_gesture = "idle"
+        self._pending_gesture = "idle"
+        self._pending_count = 0
 
         # Landmark indices
         self.WRIST      = 0
@@ -84,16 +99,38 @@ class HandTracker:
         return frame
 
     def get_landmarks(self, frame, hand_index=0):
-        """Return pixel-space landmark list [(x, y), ...] for a given hand."""
+        """
+        Return smoothed pixel-space landmark list [(x, y), ...] for a given hand.
+        Applies per-landmark EMA smoothing to reduce MediaPipe jitter.
+        """
         h, w = frame.shape[:2]
         if (
             self._detection_result is None
             or not self._detection_result.hand_landmarks
             or hand_index >= len(self._detection_result.hand_landmarks)
         ):
+            # Hand lost — reset that hand's smooth buffer
+            if hand_index < len(self._smooth_lm):
+                self._smooth_lm[hand_index] = None
             return []
+
         hand = self._detection_result.hand_landmarks[hand_index]
-        return [(int(lm.x * w), int(lm.y * h)) for lm in hand]
+        raw = [(lm.x * w, lm.y * h) for lm in hand]
+
+        # EMA smoothing
+        prev = self._smooth_lm[hand_index] if hand_index < len(self._smooth_lm) else None
+        if prev is None:
+            smoothed = raw
+        else:
+            smoothed = [
+                (
+                    _LM_SMOOTH * rx + (1.0 - _LM_SMOOTH) * px,
+                    _LM_SMOOTH * ry + (1.0 - _LM_SMOOTH) * py,
+                )
+                for (rx, ry), (px, py) in zip(raw, prev)
+            ]
+        self._smooth_lm[hand_index] = smoothed
+        return [(int(round(x)), int(round(y))) for x, y in smoothed]
 
     # ------------------------------------------------------------------
     # Gesture helpers
@@ -129,22 +166,37 @@ class HandTracker:
 
     def get_gesture(self, landmarks):
         """
-        Classify gesture:
+        Classify gesture with debouncing:
           'draw'   – only index finger raised
           'erase'  – index + middle raised (peace ✌)
           'select' – all four fingers raised (open palm)
           'idle'   – anything else
+
+        A gesture must be seen for _GESTURE_DEBOUNCE consecutive frames
+        before it is returned, preventing single-frame flicker from
+        interrupting an active drawing stroke.
         """
         if not landmarks:
-            return "idle"
-
-        f = self.fingers_up(landmarks)
-
-        if f == [0, 1, 0, 0, 0]:
-            return "draw"
-        elif f == [0, 1, 1, 0, 0]:
-            return "erase"
-        elif f[1] == 1 and f[2] == 1 and f[3] == 1 and f[4] == 1:
-            return "select"
+            raw = "idle"
         else:
-            return "idle"
+            f = self.fingers_up(landmarks)
+            if f[1] == 1 and f[2] == 0 and f[3] == 0 and f[4] == 0:
+                raw = "draw"
+            elif f[1] == 1 and f[2] == 1 and f[3] == 0 and f[4] == 0:
+                raw = "erase"
+            elif f[1] == 1 and f[2] == 1 and f[3] == 1 and f[4] == 1:
+                raw = "select"
+            else:
+                raw = "idle"
+
+        # Debounce: only switch confirmed gesture after N identical frames
+        if raw == self._pending_gesture:
+            self._pending_count += 1
+        else:
+            self._pending_gesture = raw
+            self._pending_count = 1
+
+        if self._pending_count >= _GESTURE_DEBOUNCE:
+            self._last_confirmed_gesture = raw
+
+        return self._last_confirmed_gesture
