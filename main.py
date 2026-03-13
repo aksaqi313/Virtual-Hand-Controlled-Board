@@ -39,7 +39,7 @@ TOOLBAR_HOVER_FRAMES = 12
 SPLASH_DURATION      = 3.0
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helper ───────────────────────────────────────────────────────────────────
 
 def draw_status_bar(frame, gesture, color, brush_size, eraser_mode, fps, save_msg):
     h, w = frame.shape[:2]
@@ -198,7 +198,7 @@ def main():
 
         prev_gesture = gesture
 
-        # ── Compose & display ─────────────────────────────────────────
+        # ── Compose & display ──────────────────────────────────
         output = canvas.blend(frame)
         output = toolbar.draw(output)
         draw_cursor(output, index_tip, gesture, toolbar.color, toolbar.brush_size, toolbar.eraser_mode)
@@ -212,7 +212,7 @@ def main():
 
         cv2.imshow("Virtual Hand-Controlled Board", output)
 
-        # ── Keyboard shortcuts ────────────────────────────────────────
+        # ── Keyboard shortcuts ──────────────────────────────────
         key = cv2.waitKey(1) & 0xFF
         if key in (ord('q'), 27):
             break
